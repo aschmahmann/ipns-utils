@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"github.com/multiformats/go-multihash"
 	"os"
 	"path"
 	"time"
@@ -93,6 +94,54 @@ func main() {
 						},
 						Action: func(c *cli.Context) error {
 							key, err := getIPNSKey(topic, cidVersion)
+							if err != nil {
+								return err
+							}
+							fmt.Println(key)
+							return nil
+						},
+					},
+					{
+						Name:    "get-dht-key-from-topic",
+						Usage:   "get the rendezvous DHT key from the pubsub topic",
+						Aliases: []string{"dkt"},
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Required:    false,
+								Name:        "topic",
+								Aliases:     []string{"t"},
+								Usage:       "The CIDv0 or CIDv1 representations of an IPNS Key",
+								Destination: &topic,
+							},
+						},
+						Action: func(c *cli.Context) error {
+							key, err := getDHTRendezvousKey(topic)
+							if err != nil {
+								return err
+							}
+							fmt.Println(key)
+							return nil
+						},
+					},
+					{
+						Name:    "get-dht-key-from-key",
+						Usage:   "get the rendezvous DHT key from the IPNS key",
+						Aliases: []string{"dkk"},
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Required:    true,
+								Name:        "key",
+								Aliases:     []string{"k"},
+								Usage:       "The CIDv0 or CIDv1 representations of an IPNS Key",
+								Destination: &ipnsKey,
+							},
+						},
+						Action: func(c *cli.Context) error {
+							topic, err := getPubSubTopic(ipnsKey)
+							if err != nil {
+								return err
+							}
+							key, err := getDHTRendezvousKey(topic)
 							if err != nil {
 								return err
 							}
@@ -198,4 +247,14 @@ func getIPNSKey(topic string, cidVersion int) (string, error) {
 	default:
 		return "", fmt.Errorf("could not output IPNS Key as unsupported CID version %d", cidVersion)
 	}
+}
+
+func getDHTRendezvousKey(topic string) (string, error) {
+	keybytes, err := multihash.Sum([]byte("floodsub:" + topic), multihash.SHA2_256, -1)
+	if err != nil {
+		return "", err
+	}
+
+	c := cid.NewCidV1(cid.Raw, keybytes)
+	return c.String(), nil
 }
