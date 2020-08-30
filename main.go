@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
-	"github.com/multiformats/go-multihash"
+	"io/ioutil"
 	"os"
 	"path"
 	"time"
@@ -11,8 +11,11 @@ import (
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
 
+	"github.com/multiformats/go-multihash"
+
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-ipns"
+	ipns_pb "github.com/ipfs/go-ipns/pb"
 
 	psr "github.com/libp2p/go-libp2p-pubsub-router"
 
@@ -20,7 +23,7 @@ import (
 )
 
 func main() {
-	var outputDir, ipnsKey, topic string
+	var outputDir, ipnsKey, topic, inputRecordFile string
 	var cidVersion int
 
 	app := &cli.App{
@@ -42,6 +45,24 @@ func main() {
 				},
 				Action: func(c *cli.Context) error {
 					return createIPNSRecord(outputDir)
+				},
+			},
+			{
+				Name:    "parse",
+				Aliases: []string{"r"},
+				Usage:   "parse an IPNS record",
+				Flags: []cli.Flag{
+					&cli.PathFlag{
+						Required:    false,
+						Name:        "input",
+						Aliases:     []string{"i"},
+						Value:       "",
+						Usage:       "The record file to read",
+						Destination: &inputRecordFile,
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return parseIPNSRecord(inputRecordFile)
 				},
 			},
 			{
@@ -207,6 +228,43 @@ func writeFile(path string, data []byte) error {
 	return nil
 }
 
+func parseIPNSRecord(inputRecordFile string) error {
+	data, err := ioutil.ReadFile(inputRecordFile)
+	if err != nil {
+		return err
+	}
+
+	rec := &ipns_pb.IpnsEntry{}
+	err = rec.Unmarshal(data)
+	if err != nil {
+		return err
+	}
+
+	eol, err := ipns.GetEOL(rec)
+	if err != nil {
+		return err
+	}
+
+	var ttl time.Duration
+	if rec.Ttl != nil {
+		ttl = time.Duration(*rec.Ttl)
+	}
+
+	fmt.Printf(`
+{
+    "Value": "%s",
+    "SequenceNumber" : %d,
+    "EOL" : "%v",
+    "TTL" : "%v",
+    "PubKey" : %x,
+    "Signature" : %x,
+}
+
+`, rec.Value, *rec.Sequence, eol, ttl, rec.PubKey, rec.Signature,
+	)
+	return nil
+}
+
 func getPubSubTopic(ipnsKey string) (string, error) {
 	c, err := cid.Decode(ipnsKey)
 	if err != nil {
@@ -250,7 +308,7 @@ func getIPNSKey(topic string, cidVersion int) (string, error) {
 }
 
 func getDHTRendezvousKey(topic string) (string, error) {
-	keybytes, err := multihash.Sum([]byte("floodsub:" + topic), multihash.SHA2_256, -1)
+	keybytes, err := multihash.Sum([]byte("floodsub:"+topic), multihash.SHA2_256, -1)
 	if err != nil {
 		return "", err
 	}

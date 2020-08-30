@@ -7,6 +7,12 @@ Problem: Have you ever tried to run `ipfs dht put` and realized you don't have a
 
 Solution: Run `ipns-utils create [-output directoryPath]` and it will output a file with the name of an IPNS key whose contents are a record for that key. Record fields are not yet settable (if this is a feature request feel free to file an issue/PR).
 
+## Record parsing
+
+Problem: You run `ipfs dht get /ipns/Qmxyz... > ipns_record` and get a file, but you have no easy way of seeing what's inside of it
+
+Solution: Run `ipns-utils parse -i ipns_record`
+
 ## PubSub topics
 
 Problem: The IPNS keys that people tend to interact with look like `QmXMuMWm6k3CD3sHV824H2BT1ugcHKF6Tm13ZVM8RhGTB7` (base58 CIDv0 representation) or `bafzbeiegbnjh5uopd5vc22tgkz6chf7a6ala3x5e47vnhv5sq5bzo46tri` (base32 CIDv1 with libp2p-key codec representation), while IPNS over PubSub topics look like `/record/L2lwbnMvEiCGC1J-0c8fai1qZlZ8I5fg8BYN36Tn6tPXsodDl3PTig`. This makes it very difficult to be able to know which IPNS topics you are subscribed to, or to debug the raw pubsub channel to view IPNS updates.
