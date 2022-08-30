@@ -3,15 +3,17 @@ Some utilities for working with IPNS records
 
 ## Record creation
 
-Problem: Have you ever tried to run `ipfs dht put` and realized you don't have any way of creating an IPNS record to test with?
+Problem: Have you ever tried to run `ipfs dht put` and realized you don't have any way of creating an IPNS record?
 
-Solution: Run `ipns-utils create [-output directoryPath]` and it will output a file with the name of an IPNS key whose contents are a record for that key. Record fields are not yet settable (if this is a feature request feel free to file an issue/PR).
+Solution: Run `ipns-utils create record` and it will output a record for you.
+If you need a new key to work with `ipns-utils create key` will give you a key.
 
 ## Record parsing
 
 Problem: You run `ipfs dht get /ipns/Qmxyz... > ipns_record` and get a file, but you have no easy way of seeing what's inside of it
 
-Solution: Run `ipns-utils parse -i ipns_record`
+Solution: Run `ipns-utils parse record` and choose your input type as a file path, bytes, or a multibase encoded string.
+If you want to parse private or public key information `ipns-utils parse key` will do it for you.
 
 ## PubSub topics
 
@@ -25,6 +27,6 @@ Solution:
 
 ## Notes
 
-The command line flags all have shortened aliases if/when you get tired of typing out `get-topic` over and over again, but you'll see those on the command line 😃.
+Some command line flags have shortened aliases if/when you get tired of typing out `get-topic` over and over again, but you'll see those on the command line 😃.
 
 This is, so far, a very basic tool for working with IPNS records in a way which has been useful to the author. If you have suggestions or PRs please feel free to add.

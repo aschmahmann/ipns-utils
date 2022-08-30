@@ -1,16 +1,18 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	crypto_pb "github.com/libp2p/go-libp2p-core/crypto/pb"
 	"os"
-	"path"
 	"time"
 
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/peer"
 
+	"github.com/multiformats/go-multibase"
 	"github.com/multiformats/go-multihash"
 
 	"github.com/ipfs/go-cid"
@@ -23,46 +25,230 @@ import (
 )
 
 func main() {
-	var outputDir, ipnsKey, topic, inputRecordFile string
+	var ipnsKey, topic string
 	var cidVersion int
 
 	app := &cli.App{
 		Name: "ipns-utils",
 		Commands: []*cli.Command{
 			{
-				Name:    "create",
-				Aliases: []string{"c"},
-				Usage:   "create an IPNS record",
-				Flags: []cli.Flag{
-					&cli.PathFlag{
-						Required:    false,
-						Name:        "output",
-						Aliases:     []string{"o"},
-						Value:       "",
-						Usage:       "The directory to output the record to",
-						Destination: &outputDir,
+				Name:  "create",
+				Usage: "create a IPNS records",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "id",
+						Usage: "create an IPNS identifier",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Required: false,
+								Name:     "output-base",
+								Value:    "",
+								Usage:    "multibase name or prefix character, none means no encoding",
+							},
+							&cli.StringFlag{
+								Required: false,
+								Name:     "type",
+								Value:    "ed25519",
+								Usage:    "type of the key to create",
+							},
+							&cli.IntFlag{
+								Required: false,
+								Name:     "size",
+								Value:    -1,
+								Usage:    "size of the key to generate (only valid to be set for RSA keys which defaults to 2048)",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return createIPNSID(c.String("type"), c.Int("size"), c.String("output-base"))
+						},
 					},
-				},
-				Action: func(c *cli.Context) error {
-					return createIPNSRecord(outputDir)
+					{
+						Name:      "record",
+						Usage:     "record <value>",
+						UsageText: "create an IPNS record",
+						Flags: []cli.Flag{
+							&cli.PathFlag{
+								Required: false,
+								Name:     "key-file",
+								Value:    "",
+								Usage:    "The path to the private key",
+							},
+							&cli.PathFlag{
+								Required: false,
+								Name:     "key-encoded",
+								Value:    "",
+								Usage:    "multibase encoded private key",
+							},
+							&cli.StringFlag{
+								Required: false,
+								Name:     "output-base",
+								Value:    "",
+								Usage:    "multibase name or prefix character, none means no encoding",
+							},
+							&cli.DurationFlag{
+								Required: false,
+								Name:     "ttl",
+								Value:    0,
+							},
+							&cli.TimestampFlag{
+								Required:    false,
+								Name:        "eol",
+								Layout:      "2006-01-02T15:04:05",
+								DefaultText: "End of life for the record, in UTC. Time format is 2006-01-02T15:04:05. Defaults to 24 hours from now",
+							},
+							&cli.DurationFlag{
+								Required:    false,
+								Name:        "lifetime",
+								DefaultText: "An alternative to eol. Defines how long from now a record should be valid for (e.g. 30s, -10m, 24.5h). Defaults to 24 hours",
+							},
+							&cli.Int64Flag{
+								Required: false,
+								Name:     "seqno",
+								Value:    0,
+							},
+							&cli.StringFlag{
+								Required: false,
+								Name:     "value",
+								Value:    "/ipfs/bafkqaaa",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							seqno := c.Int64("seqno")
+							ttl := c.Duration("ttl")
+							eol := c.Timestamp("eol")
+							const lifetimeStr = "lifetime"
+							lifetime := c.Duration(lifetimeStr)
+
+							if c.IsSet(lifetimeStr) && eol != nil {
+								return errors.New("cannot define lifetime and eol on a record, choose one")
+							}
+
+							if !c.IsSet(lifetimeStr) && eol == nil {
+								eolTime := time.Now().Add(time.Hour * 24)
+								eol = &eolTime
+							} else if c.IsSet(lifetimeStr) {
+								eolTime := time.Now().Add(lifetime)
+								eol = &eolTime
+							}
+
+							value := c.String("value")
+							keyFile := c.Path("key-file")
+							keyEncoded := c.String("key-encoded")
+
+							var key crypto.PrivKey
+							if keyFile != "" && keyEncoded != "" {
+								return errors.New("cannot pass a key file and encoded key")
+							} else if keyFile == "" && keyEncoded == "" {
+								return errors.New("no key specified, specify a key file or encoded key")
+							} else if keyFile != "" {
+								keyBytes, err := os.ReadFile(keyFile)
+								if err != nil {
+									return err
+								}
+								priv, err := crypto.UnmarshalPrivateKey(keyBytes)
+								if err != nil {
+									return err
+								}
+								key = priv
+							} else {
+								_, keyBytes, err := multibase.Decode(keyEncoded)
+								if err != nil {
+									return err
+								}
+								priv, err := crypto.UnmarshalPrivateKey(keyBytes)
+								if err != nil {
+									return err
+								}
+								key = priv
+							}
+
+							return createIPNSRecord(seqno, ttl, *eol, value, key, c.String("output-base"))
+						},
+					},
 				},
 			},
 			{
-				Name:    "parse",
-				Aliases: []string{"r"},
-				Usage:   "parse an IPNS record",
-				Flags: []cli.Flag{
-					&cli.PathFlag{
-						Required:    false,
-						Name:        "input",
-						Aliases:     []string{"i"},
-						Value:       "",
-						Usage:       "The record file to read",
-						Destination: &inputRecordFile,
+				Name: "parse",
+				Subcommands: []*cli.Command{
+					{
+						Name:      "record",
+						Usage:     "record <record>",
+						UsageText: "parse an IPNS record. The public key, if present, is multibase encoded",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Required: false,
+								Name:     "input-type",
+								Value:    "bytes",
+								Usage:    "record input type, may be: bytes, multibase, or path",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							recordInput := c.Args().First()
+							inputType := c.Path("input-type")
+							var recordBytes []byte
+							var err error
+							switch inputType {
+							case "bytes":
+								recordBytes = []byte(recordInput)
+							case "multibase":
+								_, recordBytes, err = multibase.Decode(recordInput)
+								if err != nil {
+									return err
+								}
+							case "path":
+								recordBytes, err = os.ReadFile(recordInput)
+								if err != nil {
+									return err
+								}
+							default:
+								return errors.New("must pass either a record file or encoded record to parse")
+							}
+
+							return parseIPNSRecord(recordBytes)
+						},
 					},
-				},
-				Action: func(c *cli.Context) error {
-					return parseIPNSRecord(inputRecordFile)
+					{
+						Name:      "key",
+						Usage:     "key <key>",
+						UsageText: "parse the encoded libp2p key format used with IPNS. The key material is multibase encoded",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Required: false,
+								Name:     "input-type",
+								Value:    "bytes",
+								Usage:    "record input type, may be: bytes, multibase, or path",
+							},
+							&cli.BoolFlag{
+								Required: false,
+								Name:     "private-key",
+								Value:    true,
+							},
+						},
+						Action: func(c *cli.Context) error {
+							keyInput := c.Args().First()
+							inputType := c.Path("input-type")
+							var keyBytes []byte
+							var err error
+							switch inputType {
+							case "bytes":
+								keyBytes = []byte(keyInput)
+							case "multibase":
+								_, keyBytes, err = multibase.Decode(keyInput)
+								if err != nil {
+									return err
+								}
+							case "path":
+								keyBytes, err = os.ReadFile(keyInput)
+								if err != nil {
+									return err
+								}
+							default:
+								return errors.New("must pass either a record file or encoded record to parse")
+							}
+
+							return parselibp2pkey(keyBytes, c.Bool("private-key"))
+						},
+					},
 				},
 			},
 			{
@@ -181,22 +367,45 @@ func main() {
 	}
 }
 
-func createIPNSRecord(outputDir string) error {
-	priv, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	if err != nil {
-		return err
+func createIPNSID(keyType string, keyLen int, outputBase string) error {
+	var priv crypto.PrivKey
+	var pub crypto.PubKey
+
+	switch keyType {
+	case "rsa":
+		rsaLen := keyLen
+		if keyLen <= 0 {
+			rsaLen = 2048
+		}
+
+		var err error
+		priv, pub, err = crypto.GenerateKeyPairWithReader(crypto.RSA, rsaLen, rand.Reader)
+		if err != nil {
+			return err
+		}
+	case "ed25519":
+		var err error
+		priv, pub, err = crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return err
+		}
+	case "secp256k1":
+		var err error
+		priv, pub, err = crypto.GenerateSecp256k1Key(rand.Reader)
+		if err != nil {
+			return err
+		}
+	case "ecdsa":
+		var err error
+		priv, pub, err = crypto.GenerateECDSAKeyPair(rand.Reader)
+		if err != nil {
+			return err
+		}
+	default:
+		return crypto.ErrBadKeyType
 	}
 
-	rec, err := ipns.Create(priv, []byte("/test/data"), 0, time.Now().Add(time.Hour*1000))
-	if err != nil {
-		return err
-	}
-
-	if err := ipns.EmbedPublicKey(pub, rec); err != nil {
-		return err
-	}
-
-	recBytes, err := rec.Marshal()
+	privKeyBytes, err := crypto.MarshalPrivateKey(priv)
 	if err != nil {
 		return err
 	}
@@ -206,37 +415,53 @@ func createIPNSRecord(outputDir string) error {
 		return err
 	}
 
-	recPath := path.Join(outputDir, recPkHash.String())
-	if err := writeFile(recPath, recBytes); err != nil {
+	if _, err := fmt.Fprintf(os.Stderr, "identfier: %s\n", peer.ToCid(recPkHash)); err != nil {
 		return err
 	}
 
-	fmt.Println(recPath)
+	if outputBase != "" {
+		enc, err := multibase.EncoderByName(outputBase)
+		if err != nil {
+			return err
+		}
+		fmt.Printf(enc.Encode(privKeyBytes))
+		return nil
+	}
+	_, err = os.Stdout.Write(privKeyBytes)
 	return nil
 }
 
-func writeFile(path string, data []byte) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	return nil
-}
-
-func parseIPNSRecord(inputRecordFile string) error {
-	data, err := ioutil.ReadFile(inputRecordFile)
+func createIPNSRecord(seqno int64, ttl time.Duration, eol time.Time, value string, privKey crypto.PrivKey, outputBase string) error {
+	rec, err := ipns.Create(privKey, []byte(value), uint64(seqno), eol, ttl)
 	if err != nil {
 		return err
 	}
 
+	pub := privKey.GetPublic()
+	if err := ipns.EmbedPublicKey(pub, rec); err != nil {
+		return err
+	}
+
+	recBytes, err := rec.Marshal()
+	if err != nil {
+		return err
+	}
+
+	if outputBase != "" {
+		enc, err := multibase.EncoderByName(outputBase)
+		if err != nil {
+			return err
+		}
+		fmt.Println(enc.Encode(recBytes))
+		return nil
+	}
+	_, err = os.Stdout.Write(recBytes)
+	return err
+}
+
+func parseIPNSRecord(data []byte) error {
 	rec := &ipns_pb.IpnsEntry{}
-	err = rec.Unmarshal(data)
-	if err != nil {
+	if err := rec.Unmarshal(data); err != nil {
 		return err
 	}
 
@@ -250,17 +475,72 @@ func parseIPNSRecord(inputRecordFile string) error {
 		ttl = time.Duration(*rec.Ttl)
 	}
 
+	pubKeyString := ""
+
+	if len(rec.PubKey) > 0 {
+		pubKeyString, err = multibase.Encode(multibase.Base16, rec.PubKey)
+		if err != nil {
+			return err
+		}
+	}
+
 	fmt.Printf(`
 {
     "Value": "%s",
     "SequenceNumber" : %d,
     "EOL" : "%v",
     "TTL" : "%v",
-    "PubKey" : %x,
-    "Signature" : %x,
+    "PubKey" : "%s"
 }
 
-`, rec.Value, *rec.Sequence, eol, ttl, rec.PubKey, rec.Signature,
+`, rec.Value, *rec.Sequence, eol, ttl, pubKeyString,
+	)
+	return nil
+}
+
+func parselibp2pkey(data []byte, isPrivateKey bool) error {
+	var keyType crypto_pb.KeyType
+	var keyMaterial []byte
+
+	if isPrivateKey {
+		privKey, err := crypto.UnmarshalPrivateKey(data)
+		if err != nil {
+			return err
+		}
+
+		keyType = privKey.Type()
+
+		keyMaterial, err = privKey.Raw()
+		if err != nil {
+			return err
+		}
+	} else {
+		pubKey, err := crypto.UnmarshalPublicKey(data)
+		if err != nil {
+			return err
+		}
+
+		keyType = pubKey.Type()
+
+		keyMaterial, err = pubKey.Raw()
+		if err != nil {
+			return err
+		}
+	}
+
+	keyMaterialString, err := multibase.Encode(multibase.Base16, keyMaterial)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf(`
+{
+	"Private Key" : %t,
+	"Key Type": "%s",
+	"Key Material" : "%s",
+}
+
+`, isPrivateKey, keyType, keyMaterialString,
 	)
 	return nil
 }
